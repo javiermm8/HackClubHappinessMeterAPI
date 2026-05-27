@@ -8,8 +8,12 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"time"
+
+	"github.com/joho/godotenv"
+	"github.com/slack-go/slack"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -30,7 +34,6 @@ type Auth struct {
 
 type POSTNewEntry struct {
 	APIKey         string
-	Name           string
 	SlackID        string
 	HappinessLevel int
 }
@@ -42,6 +45,12 @@ type POSTNewUser struct {
 
 func main() {
 
+	// Enviroment variables
+	err := godotenv.Load()
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	// Open SQLite database(If there isn't one, it creates it.)
 	db, err := sql.Open("sqlite3", "./data.db")
 	if err != nil {
@@ -50,6 +59,11 @@ func main() {
 	defer db.Close()
 
 	createTable(db)
+
+	// Slack bot
+	slackApi := slack.New(os.Getenv("BOT_TOKEN"))
+
+	fmt.Println(os.Getenv("BOT_TOKEN"), os.Getenv("REVIEW_KEY"), os.Getenv("MANAGEMENT_KEY"))
 
 	mux := http.NewServeMux()
 
@@ -92,31 +106,57 @@ func main() {
 			return
 		} else if entry.APIKey == "" ||
 			entry.HappinessLevel <= 0 ||
-			entry.HappinessLevel > 10 ||
-			entry.Name == "" {
+			entry.HappinessLevel > 10 {
 			http.Error(w, `{"error": "missing parameters or invalid values"}`, http.StatusBadRequest)
 			return
 		}
 
 		realID := getDBSlackID(db, entry.APIKey)
 
-		if entry.APIKey == "reviewerKey" {
+		if entry.APIKey == os.Getenv("REVIEW_KEY") {
 			if entry.SlackID == "" {
-				entry.SlackID = "anonymusReviewer"
-				newEntry(db, entry.Name, entry.SlackID, entry.HappinessLevel, time.Now())
+				newEntry(db, "anonymousReviewer", entry.SlackID, entry.HappinessLevel, time.Now())
 				w.Header().Set("Content-Type", "application/json")
 				json.NewEncoder(w).Encode(map[string]string{
 					"message": "Your happiness level has been logged anonymously(since you didn't include a SlackID, this is only allowed for reviewers)!",
 				})
 			} else {
-				newEntry(db, entry.Name, entry.SlackID, entry.HappinessLevel, time.Now())
+				userInfo, err := slackApi.GetUserInfo(entry.SlackID)
+				if err != nil {
+					http.Error(w, `{"error": "Unable to get slack username from id, please DM me about it."}`, http.StatusBadRequest)
+					return
+				}
+
+				name := userInfo.Profile.DisplayName
+				if name == "" {
+					name = userInfo.RealName
+				}
+				if name == "" {
+					name = userInfo.Name
+				}
+
+				newEntry(db, name, entry.SlackID, entry.HappinessLevel, time.Now())
 				w.Header().Set("Content-Type", "application/json")
 				json.NewEncoder(w).Encode(map[string]string{
 					"message": "Your happiness level has been logged!",
 				})
 			}
 		} else if entry.SlackID == realID {
-			newEntry(db, entry.Name, entry.SlackID, entry.HappinessLevel, time.Now())
+			userInfo, err := slackApi.GetUserInfo(entry.SlackID)
+			if err != nil {
+				http.Error(w, `{"error": "Unable to get slack username from id, please DM me about it."}`, http.StatusBadRequest)
+				return
+			}
+
+			name := userInfo.Profile.DisplayName
+			if name == "" {
+				name = userInfo.RealName
+			}
+			if name == "" {
+				name = userInfo.Name
+			}
+
+			newEntry(db, name, entry.SlackID, entry.HappinessLevel, time.Now())
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]string{
 				"message": "Your happiness level has been logged!",
@@ -125,14 +165,6 @@ func main() {
 			http.Error(w, `{"error": "The API key you provided doesn't match the provided SlackID. ¿Did you register? DM me to do so."}`, http.StatusBadRequest)
 			return
 		}
-
-		//		newEntry(db, entry.Name, entry.SlackID, entry.HappinessLevel, time.Now())
-		//
-		//	w.Header().Set("Content-Type", "application/json")
-		//
-		// json.NewEncoder(w).Encode(map[string]string{
-		// "message": "Your happiness level has been logged!",
-		// })
 	})
 
 	mux.HandleFunc("POST /newUser", func(w http.ResponseWriter, r *http.Request) {
@@ -144,7 +176,7 @@ func main() {
 			return
 		}
 
-		if user.ManagmentKey == "mkey" {
+		if user.ManagmentKey == os.Getenv("MANAGEMENT_KEY") {
 			// Generate new API Key(the one I have to send to the user)
 			bytes := make([]byte, 32)
 			if _, err := rand.Read(bytes); err != nil {
