@@ -22,7 +22,14 @@ type HappinessEntry struct {
 	Timestamp      time.Time
 }
 
+type Auth struct {
+	EntryID int
+	APIKey  string
+	SlackID string
+}
+
 type POSTNewEntry struct {
+	APIKey         string
 	Name           string
 	SlackID        string
 	HappinessLevel int
@@ -83,14 +90,49 @@ func main() {
 		if err := dec.Decode(&entry); err != nil {
 			http.Error(w, `{"error": "invalid JSON or unknown fields provided"}`, http.StatusBadRequest)
 			return
+		} else if entry.APIKey == "" ||
+			entry.HappinessLevel <= 0 ||
+			entry.HappinessLevel > 10 ||
+			entry.Name == "" {
+			http.Error(w, `{"error": "missing parameters or invalid values"}`, http.StatusBadRequest)
+			return
 		}
 
-		newEntry(db, entry.Name, entry.SlackID, entry.HappinessLevel, time.Now())
+		realID := getDBSlackID(db, entry.APIKey)
 
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{
-			"message": "Your happiness level has been logged!",
-		})
+		if entry.APIKey == "reviewerKey" {
+			if entry.SlackID == "" {
+				entry.SlackID = "anonymusReviewer"
+				newEntry(db, entry.Name, entry.SlackID, entry.HappinessLevel, time.Now())
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(map[string]string{
+					"message": "Your happiness level has been logged anonymously(since you didn't include a SlackID, this is only allowed for reviewers)!",
+				})
+			} else {
+				newEntry(db, entry.Name, entry.SlackID, entry.HappinessLevel, time.Now())
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(map[string]string{
+					"message": "Your happiness level has been logged!",
+				})
+			}
+		} else if entry.SlackID == realID {
+			newEntry(db, entry.Name, entry.SlackID, entry.HappinessLevel, time.Now())
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{
+				"message": "Your happiness level has been logged!",
+			})
+		} else {
+			http.Error(w, `{"error": "The API key you provided doesn't match the provided SlackID. ¿Did you register? DM me to do so."}`, http.StatusBadRequest)
+			return
+		}
+
+		//		newEntry(db, entry.Name, entry.SlackID, entry.HappinessLevel, time.Now())
+		//
+		//	w.Header().Set("Content-Type", "application/json")
+		//
+		// json.NewEncoder(w).Encode(map[string]string{
+		// "message": "Your happiness level has been logged!",
+		// })
 	})
 
 	mux.HandleFunc("POST /newUser", func(w http.ResponseWriter, r *http.Request) {
@@ -256,4 +298,41 @@ func getHappinessNeighbour(db *sql.DB, happinessLevel int) (*HappinessEntry, err
 	}
 
 	return &entry, nil
+}
+
+func getDBSlackID(db *sql.DB, APIKey string) (SlackID string) {
+	row, err := db.Query(`
+		SELECT
+			entryID,
+			APIKey,
+			slackID
+		FROM auth
+		WHERE APIKey = ?
+		LIMIT 1;
+	`, APIKey)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer row.Close()
+
+	var user Auth
+
+	for row.Next() {
+		err = row.Scan(
+			&user.EntryID,
+			&user.APIKey,
+			&user.SlackID,
+		)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				log.Fatal(err)
+				return
+			}
+			log.Fatal(err)
+			return
+		}
+	}
+
+	return user.SlackID
+
 }
