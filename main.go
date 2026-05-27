@@ -1,7 +1,9 @@
 package main
 
 import (
+	"crypto/rand"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -20,10 +22,15 @@ type HappinessEntry struct {
 	Timestamp      time.Time
 }
 
-type POSTRequest struct {
+type POSTNewEntry struct {
 	Name           string
 	SlackID        string
 	HappinessLevel int
+}
+
+type POSTNewUser struct {
+	ManagmentKey string
+	SlackID      string
 }
 
 func main() {
@@ -70,7 +77,7 @@ func main() {
 	})
 
 	mux.HandleFunc("POST /newEntry", func(w http.ResponseWriter, r *http.Request) {
-		var entry POSTRequest
+		var entry POSTNewEntry
 		dec := json.NewDecoder(r.Body)
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(&entry); err != nil {
@@ -86,6 +93,39 @@ func main() {
 		})
 	})
 
+	mux.HandleFunc("POST /newUser", func(w http.ResponseWriter, r *http.Request) {
+		var user POSTNewUser
+		dec := json.NewDecoder(r.Body)
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&user); err != nil {
+			http.Error(w, `{"error": "invalid JSON or unknown fields provided"}`, http.StatusBadRequest)
+			return
+		}
+
+		if user.ManagmentKey == "mkey" {
+			// Generate new API Key(the one I have to send to the user)
+			bytes := make([]byte, 32)
+			if _, err := rand.Read(bytes); err != nil {
+				fmt.Println("failed to generate API key: %w", err)
+			}
+			generatedAPIKey := base64.URLEncoding.WithPadding(base64.NoPadding).EncodeToString(bytes)
+
+			// Create the db entry
+			newUser(db, generatedAPIKey, user.SlackID)
+
+			// Send info back
+			message := "User resgistered! API Key: " + generatedAPIKey + " " + "SlackID: " + user.SlackID
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{
+				"message": message,
+			})
+		} else {
+			http.Error(w, `{"error": "invalid management key"}`, http.StatusBadRequest)
+			return
+		}
+
+	})
+
 	fmt.Println("Server running on http://localhost:8080")
 	http.ListenAndServe(":8080", mux)
 }
@@ -93,7 +133,7 @@ func main() {
 func createTable(db *sql.DB) {
 
 	// SQL sintaxt to create the table(if it doesn't already exist) with it's necessary colums.
-	SQLcreateTable := `
+	SQLcreateTableData := `
 	CREATE TABLE IF NOT EXISTS data (
 	entryID INTEGER PRIMARY KEY AUTOINCREMENT,
 	name TEXT,
@@ -102,8 +142,21 @@ func createTable(db *sql.DB) {
 	timestamp DATETIME NOT NULL
 	);
 	`
+	SQLcreateTableAuth := `
+	CREATE TABLE IF NOT EXISTS auth (
+	entryID INTEGER PRIMARY KEY AUTOINCREMENT,
+	APIKey TEXT NOT NULL,
+	slackID TEXT NOT NULL
+	);
+	`
+
 	// Error handleing in case db.Exec(SQLcreateTable) fails.
-	_, err := db.Exec(SQLcreateTable)
+	_, err := db.Exec(SQLcreateTableData)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	_, err = db.Exec(SQLcreateTableAuth)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -143,6 +196,29 @@ func newEntry(
 	fmt.Println("Entry added! Entry ID:", id)
 }
 
+func newUser(db *sql.DB, APIKey string, SlackID string) {
+	SQLNewUser := `
+	INSERT INTO auth
+	(APIKey, SlackID)
+	VALUES (?, ?)
+	`
+	result, err := db.Exec(
+		SQLNewUser,
+		APIKey,
+		SlackID,
+	)
+	if err != nil {
+		log.Fatal(nil)
+	}
+
+	id, err := result.LastInsertId()
+	if err != nil {
+		log.Fatal(nil)
+	}
+
+	fmt.Println("User added! User ID:", id)
+}
+
 func getHappinessNeighbour(db *sql.DB, happinessLevel int) (*HappinessEntry, error) {
 	row, err := db.Query(`
 		SELECT
@@ -164,18 +240,18 @@ func getHappinessNeighbour(db *sql.DB, happinessLevel int) (*HappinessEntry, err
 	var entry HappinessEntry
 
 	for row.Next() {
-		err1 := row.Scan(
+		err = row.Scan(
 			&entry.EntryID,
 			&entry.Name,
 			&entry.SlackID,
 			&entry.HappinessLevel,
 			&entry.Timestamp,
 		)
-		if err1 != nil {
-			if err1 == sql.ErrNoRows {
+		if err != nil {
+			if err == sql.ErrNoRows {
 				return nil, nil
 			}
-			return nil, err1
+			return nil, err
 		}
 	}
 
