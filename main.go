@@ -11,6 +11,7 @@ import (
 	"os"
 	"strconv"
 	"time"
+	"unicode/utf8"
 
 	"github.com/joho/godotenv"
 	"github.com/slack-go/slack"
@@ -23,6 +24,7 @@ type HappinessEntry struct {
 	Name           string
 	SlackID        string
 	HappinessLevel int
+	Note           string
 	Timestamp      time.Time
 }
 
@@ -37,6 +39,7 @@ type POSTNewEntry struct {
 	APIKey         string
 	SlackID        string
 	HappinessLevel int
+	Note           string
 }
 
 type POSTNewUser struct {
@@ -90,6 +93,7 @@ func main() {
 		}
 
 		HappinessNeighbourEntry, err := getHappinessNeighbour(db, happinessLevel)
+		fmt.Println(HappinessNeighbourEntry, err)
 
 		if HappinessNeighbourEntry != nil {
 			message := "Your happiness neighbour is " + HappinessNeighbourEntry.Name + "! " + "Their slack id is: " + HappinessNeighbourEntry.SlackID + " and the last time they logged a happiness level of " + strconv.Itoa(HappinessNeighbourEntry.HappinessLevel) + " was at: " + HappinessNeighbourEntry.Timestamp.String()
@@ -113,8 +117,13 @@ func main() {
 			return
 		} else if entry.APIKey == "" ||
 			entry.HappinessLevel <= 0 ||
-			entry.HappinessLevel > 10 {
+			entry.HappinessLevel > 10 ||
+			entry.Note == "" {
 			http.Error(w, `{"error": "missing parameters or invalid values"}`, http.StatusBadRequest)
+			return
+		} else if utf8.RuneCountInString(entry.Note) >= 300 ||
+			utf8.RuneCountInString(entry.Note) < 10 {
+			http.Error(w, `{"error": "Invalid note length. Max:300/Min:10 chars."}`, http.StatusBadRequest)
 			return
 		}
 
@@ -122,7 +131,7 @@ func main() {
 
 		if entry.APIKey == os.Getenv("REVIEW_KEY") {
 			if entry.SlackID == "" {
-				newEntry(db, "anonymousReviewer", entry.SlackID, entry.HappinessLevel, time.Now())
+				newEntry(db, "anonymousReviewer", entry.SlackID, entry.HappinessLevel, entry.Note, time.Now())
 				w.Header().Set("Content-Type", "application/json")
 				json.NewEncoder(w).Encode(map[string]string{
 					"message": "Your happiness level has been logged anonymously(since you didn't include a SlackID, this is only allowed for reviewers)!",
@@ -142,7 +151,7 @@ func main() {
 					name = userInfo.Name
 				}
 
-				newEntry(db, name, entry.SlackID, entry.HappinessLevel, time.Now())
+				newEntry(db, name, entry.SlackID, entry.HappinessLevel, entry.Note, time.Now())
 				w.Header().Set("Content-Type", "application/json")
 				json.NewEncoder(w).Encode(map[string]string{
 					"message": name + ", your happiness level has been logged!",
@@ -163,7 +172,7 @@ func main() {
 				name = userInfo.Name
 			}
 
-			newEntry(db, name, entry.SlackID, entry.HappinessLevel, time.Now())
+			newEntry(db, name, entry.SlackID, entry.HappinessLevel, entry.Note, time.Now())
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]string{
 				"message": name + ", your happiness level has been logged!",
@@ -231,6 +240,7 @@ func createTable(db *sql.DB) {
 	name TEXT,
 	slackID TEXT,
 	happinessLevel INTEGER NOT NULL,
+	note TEXT,
 	timestamp DATETIME NOT NULL
 	);
 	`
@@ -263,18 +273,20 @@ func newEntry(
 	Name string,
 	SlackID string,
 	HappinessLevel int,
+	Note string,
 	Timestamp time.Time,
 ) {
 	SQLnewEntry := `
 	INSERT INTO data
-	(name, slackID, happinessLevel, timestamp)
-	VALUES (?, ?, ?, ?)
+	(name, slackID, happinessLevel, note, timestamp)
+	VALUES (?, ?, ?, ?, ?)
 	`
 	output, err := db.Exec(
 		SQLnewEntry,
 		Name,
 		SlackID,
 		HappinessLevel,
+		Note,
 		Timestamp,
 	)
 	if err != nil {
@@ -320,6 +332,7 @@ func getHappinessNeighbour(db *sql.DB, happinessLevel int) (*HappinessEntry, err
 			name,
 			slackID,
 			happinessLevel,
+			note,
 			timestamp
 		FROM data
 		WHERE happinessLevel = ?
@@ -339,6 +352,7 @@ func getHappinessNeighbour(db *sql.DB, happinessLevel int) (*HappinessEntry, err
 			&entry.Name,
 			&entry.SlackID,
 			&entry.HappinessLevel,
+			&entry.Note,
 			&entry.Timestamp,
 		)
 		if err != nil {
