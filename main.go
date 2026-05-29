@@ -80,9 +80,9 @@ func main() {
 		})
 	})
 
-	/// GET HAPPINESS NEIGHBOUR
+	/// GET HAPPINESS FRIEND
 
-	mux.HandleFunc("GET /happinessNeighbour", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /happinessFriend", func(w http.ResponseWriter, r *http.Request) {
 		rawHappinessLevel := r.URL.Query().Get("happinessLevel")
 		happinessLevel, err := strconv.Atoi(rawHappinessLevel)
 		if err != nil {
@@ -92,11 +92,10 @@ func main() {
 			return
 		}
 
-		HappinessNeighbourEntry, err := getHappinessNeighbour(db, happinessLevel)
-		fmt.Println(HappinessNeighbourEntry, err)
+		HappinessFriendEntry, err := getHappinessFriend(db, happinessLevel)
 
-		if HappinessNeighbourEntry != nil {
-			message := "Your happiness neighbour is " + HappinessNeighbourEntry.Name + "! " + "Their slack id is: " + HappinessNeighbourEntry.SlackID + " and the last time they logged a happiness level of " + strconv.Itoa(HappinessNeighbourEntry.HappinessLevel) + " was at: " + HappinessNeighbourEntry.Timestamp.String()
+		if HappinessFriendEntry != nil {
+			message := "Your happiness friend is " + HappinessFriendEntry.Name + "! " + "Their slack id is: " + HappinessFriendEntry.SlackID + " and the last time they logged a happiness level of " + strconv.Itoa(HappinessFriendEntry.HappinessLevel) + " was at: " + HappinessFriendEntry.Timestamp.String()
 
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]string{
@@ -325,7 +324,7 @@ func newUser(db *sql.DB, APIKey string, SlackID string, Timestamp time.Time) {
 	fmt.Println("User added! User ID:", id)
 }
 
-func getHappinessNeighbour(db *sql.DB, happinessLevel int) (*HappinessEntry, error) {
+func getHappinessFriend(db *sql.DB, happinessLevel int) (*HappinessEntry, error) {
 	row, err := db.Query(`
 		SELECT
 			entryID,
