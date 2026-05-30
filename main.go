@@ -111,7 +111,7 @@ func main() {
 		}
 
 		if HappinessFriendEntry.EntryID != 0 {
-			message := "Your happiness friend is " + HappinessFriendEntry.Name + "! " + "Their slack id is: " + HappinessFriendEntry.SlackID + " and the last time they logged a happiness level of " + strconv.Itoa(HappinessFriendEntry.HappinessLevel) + " was at: " + HappinessFriendEntry.Timestamp.String()
+			message := "Your happiness friend is " + HappinessFriendEntry.Name + "! " + "Their slack id is: " + HappinessFriendEntry.SlackID + " and the last time they logged a happiness level of " + strconv.Itoa(HappinessFriendEntry.HappinessLevel) + " was at: " + HappinessFriendEntry.Timestamp.String() + " The note they added to their latest entry was: " + HappinessFriendEntry.Note
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]string{
 				"message": message,
@@ -225,6 +225,21 @@ func main() {
 			return
 		}
 
+	})
+
+	/// GET STATS
+	mux.HandleFunc("GET /stats", func(w http.ResponseWriter, r *http.Request) {
+		message, err := getStats(db)
+		if err != nil {
+			http.Error(w, "Unable to get stats. Please contact javim in slack.", http.StatusInternalServerError)
+			logger.Error("Problem with getStats()", "error", err)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{
+			"message": message,
+		})
 	})
 
 	/// POST NEW ENTRY
@@ -395,6 +410,8 @@ func main() {
 	http.ListenAndServe(":8080", mux)
 }
 
+// Functions to deal with the databases
+
 func createTable(db *sql.DB) {
 	// SQL sintaxt to create the table(if it doesn't already exist) with it's necessary colums.
 	SQLcreateTableData := `
@@ -553,7 +570,7 @@ func getDBSlackID(db *sql.DB, APIKey string) (SlackID string, error error) {
 }
 
 func getProfile(db *sql.DB, slackID string) (*HappinessEntry, float64, int, error) {
-	row1, err := db.Query(`
+	row, err := db.Query(`
 		SELECT
 			entryID,
 			name,
@@ -568,14 +585,14 @@ func getProfile(db *sql.DB, slackID string) (*HappinessEntry, float64, int, erro
 	if err != nil {
 		return nil, 0, 0, err
 	}
-	defer row1.Close()
+	defer row.Close()
 
 	var entry HappinessEntry
 	var totalHappiness int
 	var numberOfEntries int
 
-	for row1.Next() {
-		err = row1.Scan(
+	for row.Next() {
+		err = row.Scan(
 			&entry.EntryID,
 			&entry.Name,
 			&entry.SlackID,
@@ -598,4 +615,64 @@ func getProfile(db *sql.DB, slackID string) (*HappinessEntry, float64, int, erro
 	var averageHappiness float64 = float64(totalHappiness) / float64(numberOfEntries)
 
 	return &entry, averageHappiness, numberOfEntries, nil
+}
+
+func getStats(db *sql.DB) (message string, error error) {
+	row, err := db.Query(`
+		SELECT
+			entryID
+		FROM data;
+	`)
+	if err != nil {
+		return "", err
+	}
+	defer row.Close()
+
+	var entry HappinessEntry
+	var numberOfEntries int
+
+	for row.Next() {
+		err = row.Scan(
+			&entry.EntryID,
+		)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				return "", nil
+			}
+			return "", err
+		}
+
+		numberOfEntries += 1
+	}
+
+	row1, err := db.Query(`
+		SELECT
+			entryID
+		FROM auth;
+	`)
+	if err != nil {
+		return "", err
+	}
+	defer row1.Close()
+
+	var entry1 Auth
+	var numberOfEntries1 int
+
+	for row1.Next() {
+		err = row1.Scan(
+			&entry1.EntryID,
+		)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				return "", nil
+			}
+			return "", err
+		}
+
+		numberOfEntries1 += 1
+	}
+
+	message = "Total number of entries: " + strconv.Itoa(numberOfEntries) + " Total number of users: " + strconv.Itoa(numberOfEntries1)
+
+	return message, nil
 }
