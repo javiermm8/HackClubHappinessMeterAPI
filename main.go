@@ -15,10 +15,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"golang.org/x/time/rate"
-
 	"github.com/joho/godotenv"
 	"github.com/slack-go/slack"
+	"golang.org/x/time/rate"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -51,7 +50,7 @@ type POSTNewUser struct {
 	SlackID      string
 }
 
-// Rate limit
+// Rate limit variables
 var clients = make(map[string]*rate.Limiter)
 var mu sync.Mutex
 
@@ -105,14 +104,14 @@ func main() {
 			return
 		}
 		if happinessLevel <= 0 || happinessLevel > 10 {
-			http.Error(w, `{"error": "Invalid happiness level. Max:10/Min:0"}`, http.StatusBadRequest)
+			http.Error(w, `{"error": "Invalid happiness level. Max:10/Min:1"}`, http.StatusBadRequest)
 			return
 		}
 
 		// Get friend from db(the actual search is managed by sqlite)
 		HappinessFriendEntry, err := getHappinessFriend(db, happinessLevel)
 		if err != nil {
-			http.Error(w, `{"Unable to get happiness friend. Please contact javim in Slack."}`, http.StatusInternalServerError)
+			http.Error(w, `{"error": "Unable to get happiness friend. Please contact javim in Slack."}`, http.StatusInternalServerError)
 			logger.Error("Unable to get happiness friend. Problem with getHappinessFriend.", "error", err)
 			return
 		}
@@ -125,7 +124,7 @@ func main() {
 			})
 			return
 		} else {
-			http.Error(w, `{"message": "Nobody with that happiness level was found."}`, http.StatusNotFound)
+			http.Error(w, `{"message": "No users found with that happiness level."}`, http.StatusNotFound)
 			return
 		}
 	})
@@ -149,7 +148,7 @@ func main() {
 				}
 
 				if numberOfEntries == 0 {
-					http.Error(w, `{"message": "No profile found. Hi reviewer! You first have to create an anonymous entry(/newEntry without slackID). Then, you'll be able to view the anonymous reviewr profile."}`, http.StatusNotFound)
+					http.Error(w, `{"message": "No profile found. Hi reviewer! You first have to create an anonymous entry(/newEntry without slackID). Then, you'll be able to view the anonymous reviewer profile."}`, http.StatusNotFound)
 					return
 				}
 
@@ -173,7 +172,7 @@ func main() {
 				}
 
 				if numberOfEntries == 0 {
-					http.Error(w, `{"message": "No profile found. ¿Have you created any entries?"}`, http.StatusNotFound)
+					http.Error(w, `{"message": "No profile found. Have you created any entries?"}`, http.StatusNotFound)
 					logger.Error("Problem with getProfile().", "error", err)
 					return
 				}
@@ -205,13 +204,13 @@ func main() {
 		} else if slackID == realID {
 			entry, averageHappiness, numberOfEntries, err := getProfile(db, slackID)
 			if err != nil {
-				http.Error(w, `{"message": "Something went wrong. Something went wrong. Please contact javim in slack."}`, http.StatusInternalServerError)
+				http.Error(w, `{"message": "Something went wrong. Please contact javim in Slack."}`, http.StatusInternalServerError)
 				logger.Error("Problem with getProfile().", "error", err)
 				return
 			}
 
 			if numberOfEntries == 0 {
-				http.Error(w, `{"message": "No profile found. ¿Have you created any entries?"}`, http.StatusNotFound)
+				http.Error(w, `{"message": "No profile found. Have you created any entries?"}`, http.StatusNotFound)
 				logger.Error("Problem with getProfile().", "error", err)
 				return
 			}
@@ -228,7 +227,7 @@ func main() {
 			})
 			return
 		} else {
-			http.Error(w, `{"message": "The provided API key doesn't match the provided SlackID. ¿Did you register? DM me to do so."}`, http.StatusUnauthorized)
+			http.Error(w, `{"message": "The provided API key doesn't match the provided SlackID. Did you register? DM me to do so."}`, http.StatusUnauthorized)
 			return
 		}
 
@@ -238,7 +237,7 @@ func main() {
 	mux.HandleFunc("GET /stats", func(w http.ResponseWriter, r *http.Request) {
 		message, err := getStats(db)
 		if err != nil {
-			http.Error(w, "Unable to get stats. Please contact javim in slack.", http.StatusInternalServerError)
+			http.Error(w, "Unable to get stats. Please contact javim in Slack.", http.StatusInternalServerError)
 			logger.Error("Problem with getStats()", "error", err)
 			return
 		}
@@ -255,13 +254,13 @@ func main() {
 		dec := json.NewDecoder(r.Body)
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(&entry); err != nil {
-			http.Error(w, `{"error": "invalid JSON or unknown fields provided"}`, http.StatusBadRequest)
+			http.Error(w, `{"error": "Invalid JSON or unknown fields provided"}`, http.StatusBadRequest)
 			return
 		} else if entry.APIKey == "" ||
 			entry.HappinessLevel <= 0 ||
 			entry.HappinessLevel > 10 ||
 			entry.Note == "" {
-			http.Error(w, `{"error": "missing parameters or invalid values"}`, http.StatusBadRequest)
+			http.Error(w, `{"error": "Missing parameters or invalid values"}`, http.StatusBadRequest)
 			return
 		} else if utf8.RuneCountInString(entry.Note) > 300 ||
 			utf8.RuneCountInString(entry.Note) < 10 {
@@ -288,7 +287,7 @@ func main() {
 			} else {
 				userInfo, err := slackApi.GetUserInfo(entry.SlackID)
 				if err != nil {
-					http.Error(w, `{"error": "Unable to get slack username from id. Try without SlackID or contact javim in slack."}`, http.StatusInternalServerError)
+					http.Error(w, `{"error": "Unable to get slack username from id. Try without SlackID or contact javim in Slack."}`, http.StatusInternalServerError)
 					logger.Error("Unable to get slack username from id. Problem with slackApi.GetUserInfo().", "error", err)
 					return
 				}
@@ -315,7 +314,7 @@ func main() {
 				return
 			}
 		} else if getDBSlackIDerr != nil {
-			http.Error(w, `{"error": "Auth error. Please contact javim in slack."}`, http.StatusInternalServerError)
+			http.Error(w, `{"error": "Auth error. Please contact javim in Slack."}`, http.StatusInternalServerError)
 			logger.Error("Problem with getDBSlackID().", "error", getDBSlackIDerr)
 			return
 		} else if entry.SlackID == "" {
@@ -324,7 +323,7 @@ func main() {
 		} else if entry.SlackID == realID {
 			userInfo, err := slackApi.GetUserInfo(entry.SlackID)
 			if err != nil {
-				http.Error(w, `{"error": "Unable to get slack username from id. Does the slack account exist? Please contact javim in slack."}`, http.StatusInternalServerError)
+				http.Error(w, `{"error": "Unable to get slack username from id. Does the slack account exist? Please contact javim in Slack."}`, http.StatusInternalServerError)
 				logger.Error("Problem with slackApi.GetUserInfo().", "error:", err)
 				return
 			}
@@ -349,7 +348,7 @@ func main() {
 			})
 			return
 		} else {
-			http.Error(w, `{"error": "The provided API key doesn't match the provided SlackID. ¿Did you register? DM me to do so."}`, http.StatusUnauthorized)
+			http.Error(w, `{"error": "The provided API key doesn't match the provided SlackID. Did you register? DM me to do so."}`, http.StatusUnauthorized)
 			return
 		}
 	})
@@ -363,7 +362,7 @@ func main() {
 			http.Error(w, `{"error": "Invalid JSON or unknown fields provided"}`, http.StatusBadRequest)
 			return
 		} else if user.SlackID == "" {
-			http.Error(w, `{"error": "You must inclued a SlackID"}`, http.StatusBadRequest)
+			http.Error(w, `{"error": "You must include a SlackID"}`, http.StatusBadRequest)
 			return
 		}
 
@@ -398,12 +397,12 @@ func main() {
 				return
 			}
 
-			message := "User resgistered! API Key: " + generatedAPIKey + " SlackID: " + user.SlackID + " Slack Name: " + name
+			message := "User registered! API Key: " + generatedAPIKey + " SlackID: " + user.SlackID + " Slack Name: " + name
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]string{
 				"message": message,
 			})
-			logger.Info("User resgistered!", "SlackID", user.SlackID, "Slack Name", name)
+			logger.Info("User registered!", "SlackID", user.SlackID, "Slack Name", name)
 			return
 		} else {
 			http.Error(w, `{"error": "Invalid management key"}`, http.StatusUnauthorized)
@@ -455,7 +454,7 @@ func createTable(db *sql.DB) {
 		log.Fatal(err)
 	}
 
-	fmt.Println("I don't know if there was a table, but there is one now.")
+	fmt.Println("Database tables are ready.")
 }
 
 func newEntry(
@@ -703,7 +702,7 @@ func corsMiddleware(next http.Handler) http.Handler {
 		mu.Unlock()
 
 		if limiter.Allow() == false {
-			http.Error(w, "Rate limit", http.StatusTooManyRequests)
+			http.Error(w, "Too many requests.", http.StatusTooManyRequests)
 			return
 		}
 
