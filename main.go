@@ -19,6 +19,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
+// Structs for db
 type HappinessEntry struct {
 	EntryID        int
 	Name           string
@@ -27,7 +28,6 @@ type HappinessEntry struct {
 	Note           string
 	Timestamp      time.Time
 }
-
 type Auth struct {
 	EntryID   int
 	APIKey    string
@@ -35,13 +35,13 @@ type Auth struct {
 	Timestamp time.Time
 }
 
+// Structs for POST requests
 type POSTNewEntry struct {
 	APIKey         string
 	SlackID        string
 	HappinessLevel int
 	Note           string
 }
-
 type POSTNewUser struct {
 	ManagmentKey string
 	SlackID      string
@@ -49,7 +49,7 @@ type POSTNewUser struct {
 
 func main() {
 
-	// Enviroment variables
+	// Load enviroment variables(gets .env by default)
 	err := godotenv.Load()
 	if err != nil {
 		log.Fatal(err)
@@ -61,18 +61,15 @@ func main() {
 		log.Fatal(err)
 	}
 	defer db.Close()
-
 	createTable(db)
 
 	// Slack bot
 	slackApi := slack.New(os.Getenv("BOT_TOKEN"))
 
-	fmt.Println(os.Getenv("BOT_TOKEN"), os.Getenv("REVIEW_KEY"), os.Getenv("MANAGEMENT_KEY"))
-
+	// Start http server
 	mux := http.NewServeMux()
 
 	/// GET STATUS
-
 	mux.HandleFunc("GET /status", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{
@@ -81,32 +78,37 @@ func main() {
 	})
 
 	/// GET HAPPINESS FRIEND
-
 	mux.HandleFunc("GET /happinessFriend", func(w http.ResponseWriter, r *http.Request) {
 		rawHappinessLevel := r.URL.Query().Get("happinessLevel")
 		happinessLevel, err := strconv.Atoi(rawHappinessLevel)
+		// Verify happiness level is ok
 		if err != nil {
-			log.Printf("Invalid happiness level: %v", err)
-
-			http.Error(w, `{"error": "Invalid happiness level"}`, http.StatusBadRequest)
+			http.Error(w, `{"error": "Invalid happiness level."}`, http.StatusBadRequest)
+			return
+		}
+		if happinessLevel < 0 || happinessLevel > 10 {
+			http.Error(w, `{"error": "Invalid happiness level. Max:10/Min:0"}`, http.StatusBadRequest)
 			return
 		}
 
+		// Get friend from db(the actual search is managed by sqlite)
 		HappinessFriendEntry, err := getHappinessFriend(db, happinessLevel)
+		if err != nil {
+			http.Error(w, `{"Unable to get happiness friend. DB error. Please contact javim in Slack."}`, http.StatusInternalServerError)
+		}
 
-		if HappinessFriendEntry != nil {
+		if HappinessFriendEntry.EntryID != 0 {
 			message := "Your happiness friend is " + HappinessFriendEntry.Name + "! " + "Their slack id is: " + HappinessFriendEntry.SlackID + " and the last time they logged a happiness level of " + strconv.Itoa(HappinessFriendEntry.HappinessLevel) + " was at: " + HappinessFriendEntry.Timestamp.String()
-
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]string{
 				"message": message,
 			})
+		} else {
+			http.Error(w, `{"Nobody with that happiness level was found."}`, http.StatusNotFound)
 		}
-
 	})
 
 	/// POST NEW ENTRY
-
 	mux.HandleFunc("POST /newEntry", func(w http.ResponseWriter, r *http.Request) {
 		var entry POSTNewEntry
 		dec := json.NewDecoder(r.Body)
@@ -126,11 +128,15 @@ func main() {
 			return
 		}
 
-		realID := getDBSlackID(db, entry.APIKey)
+		realID, getDBSlackIDerr := getDBSlackID(db, entry.APIKey)
 
 		if entry.APIKey == os.Getenv("REVIEW_KEY") {
 			if entry.SlackID == "" {
-				newEntry(db, "anonymousReviewer", entry.SlackID, entry.HappinessLevel, entry.Note, time.Now())
+				err := newEntry(db, "anonymousReviewer", entry.SlackID, entry.HappinessLevel, entry.Note, time.Now())
+				if err != nil {
+					http.Error(w, `{"error": "DB failure. Please contact javim in slack."}`, http.StatusInternalServerError)
+					return
+				}
 				w.Header().Set("Content-Type", "application/json")
 				json.NewEncoder(w).Encode(map[string]string{
 					"message": "Your happiness level has been logged anonymously(since you didn't include a SlackID, this is only allowed for reviewers)!",
@@ -138,7 +144,7 @@ func main() {
 			} else {
 				userInfo, err := slackApi.GetUserInfo(entry.SlackID)
 				if err != nil {
-					http.Error(w, `{"error": "Unable to get slack username from id. Try without SlackID."}`, http.StatusInternalServerError)
+					http.Error(w, `{"error": "Unable to get slack username from id. Try without SlackID or contact javim in slack."}`, http.StatusInternalServerError)
 					return
 				}
 
@@ -150,16 +156,26 @@ func main() {
 					name = userInfo.Name
 				}
 
-				newEntry(db, name, entry.SlackID, entry.HappinessLevel, entry.Note, time.Now())
+				err1 := newEntry(db, name, entry.SlackID, entry.HappinessLevel, entry.Note, time.Now())
+				if err1 != nil {
+					http.Error(w, `{"error": "DB failure. Please contact javim in slack."}`, http.StatusInternalServerError)
+					return
+				}
 				w.Header().Set("Content-Type", "application/json")
 				json.NewEncoder(w).Encode(map[string]string{
 					"message": name + ", your happiness level has been logged!",
 				})
 			}
+		} else if getDBSlackIDerr != nil {
+			http.Error(w, `{"error": "Auth error. Please contact javim in slack."}`, http.StatusInternalServerError)
+			return
+		} else if entry.SlackID == "" {
+			http.Error(w, `{"error": "You must include a SlackID unless you have a review key."}`, http.StatusBadRequest)
+			return
 		} else if entry.SlackID == realID {
 			userInfo, err := slackApi.GetUserInfo(entry.SlackID)
 			if err != nil {
-				http.Error(w, `{"error": "Unable to get slack username from id, please DM me about it."}`, http.StatusInternalServerError)
+				http.Error(w, `{"error": "Unable to get slack username from id. Please contact javim in slack."}`, http.StatusInternalServerError)
 				return
 			}
 
@@ -171,7 +187,11 @@ func main() {
 				name = userInfo.Name
 			}
 
-			newEntry(db, name, entry.SlackID, entry.HappinessLevel, entry.Note, time.Now())
+			err1 := newEntry(db, name, entry.SlackID, entry.HappinessLevel, entry.Note, time.Now())
+			if err1 != nil {
+				http.Error(w, `{"error": "DB failure. Please contact javim in slack."}`, http.StatusInternalServerError)
+				return
+			}
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]string{
 				"message": name + ", your happiness level has been logged!",
@@ -183,7 +203,6 @@ func main() {
 	})
 
 	/// POST NEW USER
-
 	mux.HandleFunc("POST /newUser", func(w http.ResponseWriter, r *http.Request) {
 		var user POSTNewUser
 		dec := json.NewDecoder(r.Body)
@@ -191,20 +210,31 @@ func main() {
 		if err := dec.Decode(&user); err != nil {
 			http.Error(w, `{"error": "invalid JSON or unknown fields provided"}`, http.StatusBadRequest)
 			return
+		} else if user.SlackID == "" {
+			http.Error(w, `{"error": "You must inclued a SlackID"}`, http.StatusBadRequest)
+			return
 		}
 
 		if user.ManagmentKey == os.Getenv("MANAGEMENT_KEY") {
 			// Generate new API Key(the one I have to send to the user)
 			bytes := make([]byte, 32)
 			if _, err := rand.Read(bytes); err != nil {
-				log.Fatal("failed to generate API key: %w", err)
+				http.Error(w, `{"error": "Failed to generate API key"}`, http.StatusInternalServerError)
+				return
 			}
 			generatedAPIKey := base64.URLEncoding.WithPadding(base64.NoPadding).EncodeToString(bytes)
 
-			// Create the db entry
-			newUser(db, generatedAPIKey, user.SlackID, time.Now())
+			err := newUser(db, generatedAPIKey, user.SlackID, time.Now())
+			if err != nil {
+				http.Error(w, `{"error": "DB failure."}`, http.StatusInternalServerError)
+			}
 
-			userInfo, _ := slackApi.GetUserInfo(user.SlackID)
+			userInfo, err := slackApi.GetUserInfo(user.SlackID)
+			if err != nil {
+				http.Error(w, `{"error": "Unable to get slack username from id. Maybe a typo?"}`, http.StatusInternalServerError)
+				return
+			}
+
 			name := userInfo.Profile.DisplayName
 			if name == "" {
 				name = userInfo.RealName
@@ -213,8 +243,7 @@ func main() {
 				name = userInfo.Name
 			}
 
-			// Send info back
-			message := "User resgistered! API Key: " + generatedAPIKey + " " + "SlackID: " + user.SlackID + "Slack Name: " + name
+			message := "User resgistered! API Key: " + generatedAPIKey + " " + "SlackID: " + user.SlackID + " " + "Slack Name: " + name
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]string{
 				"message": message,
@@ -231,7 +260,6 @@ func main() {
 }
 
 func createTable(db *sql.DB) {
-
 	// SQL sintaxt to create the table(if it doesn't already exist) with it's necessary colums.
 	SQLcreateTableData := `
 	CREATE TABLE IF NOT EXISTS data (
@@ -255,11 +283,12 @@ func createTable(db *sql.DB) {
 	// Error handleing in case db.Exec(SQLcreateTable) fails.
 	_, err := db.Exec(SQLcreateTableData)
 	if err != nil {
+		fmt.Println("Failed to create data db.")
 		log.Fatal(err)
 	}
-
 	_, err = db.Exec(SQLcreateTableAuth)
 	if err != nil {
+		fmt.Println("Failed to create auth db.")
 		log.Fatal(err)
 	}
 
@@ -274,7 +303,7 @@ func newEntry(
 	HappinessLevel int,
 	Note string,
 	Timestamp time.Time,
-) {
+) (error error) {
 	SQLnewEntry := `
 	INSERT INTO data
 	(name, slackID, happinessLevel, note, timestamp)
@@ -289,18 +318,19 @@ func newEntry(
 		Timestamp,
 	)
 	if err != nil {
-		log.Fatal(nil)
+		return err
 	}
 
 	id, err := output.LastInsertId()
 	if err != nil {
-		log.Fatal(nil)
+		return err
 	}
 
 	fmt.Println("Entry added! Entry ID:", id)
+	return nil
 }
 
-func newUser(db *sql.DB, APIKey string, SlackID string, Timestamp time.Time) {
+func newUser(db *sql.DB, APIKey string, SlackID string, Timestamp time.Time) (error error) {
 	SQLNewUser := `
 	INSERT INTO auth
 	(APIKey, slackID, timestamp)
@@ -313,15 +343,16 @@ func newUser(db *sql.DB, APIKey string, SlackID string, Timestamp time.Time) {
 		Timestamp,
 	)
 	if err != nil {
-		log.Fatal(nil)
+		return err
 	}
 
 	id, err := result.LastInsertId()
 	if err != nil {
-		log.Fatal(nil)
+		return err
 	}
 
 	fmt.Println("User added! User ID:", id)
+	return nil
 }
 
 func getHappinessFriend(db *sql.DB, happinessLevel int) (*HappinessEntry, error) {
@@ -339,12 +370,11 @@ func getHappinessFriend(db *sql.DB, happinessLevel int) (*HappinessEntry, error)
 		LIMIT 1;
 	`, happinessLevel)
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 	defer row.Close()
 
 	var entry HappinessEntry
-
 	for row.Next() {
 		err = row.Scan(
 			&entry.EntryID,
@@ -365,7 +395,7 @@ func getHappinessFriend(db *sql.DB, happinessLevel int) (*HappinessEntry, error)
 	return &entry, nil
 }
 
-func getDBSlackID(db *sql.DB, APIKey string) (SlackID string) {
+func getDBSlackID(db *sql.DB, APIKey string) (SlackID string, error error) {
 	row, err := db.Query(`
 		SELECT
 			entryID,
@@ -377,7 +407,7 @@ func getDBSlackID(db *sql.DB, APIKey string) (SlackID string) {
 		LIMIT 1;
 	`, APIKey)
 	if err != nil {
-		log.Fatal(err)
+		return "", err
 	}
 	defer row.Close()
 
@@ -392,14 +422,12 @@ func getDBSlackID(db *sql.DB, APIKey string) (SlackID string) {
 		)
 		if err != nil {
 			if err == sql.ErrNoRows {
-				log.Fatal(err)
-				return
+				return "", nil
 			}
-			log.Fatal(err)
-			return
+			return "", err
 		}
 	}
 
-	return user.SlackID
+	return user.SlackID, nil
 
 }
