@@ -11,8 +11,11 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"sync"
 	"time"
 	"unicode/utf8"
+
+	"golang.org/x/time/rate"
 
 	"github.com/joho/godotenv"
 	"github.com/slack-go/slack"
@@ -47,6 +50,10 @@ type POSTNewUser struct {
 	ManagmentKey string
 	SlackID      string
 }
+
+// Rate limit
+var clients = make(map[string]*rate.Limiter)
+var mu sync.Mutex
 
 func main() {
 
@@ -97,7 +104,7 @@ func main() {
 			http.Error(w, `{"error": "Invalid happiness level."}`, http.StatusBadRequest)
 			return
 		}
-		if happinessLevel < 0 || happinessLevel > 10 {
+		if happinessLevel <= 0 || happinessLevel > 10 {
 			http.Error(w, `{"error": "Invalid happiness level. Max:10/Min:0"}`, http.StatusBadRequest)
 			return
 		}
@@ -407,7 +414,10 @@ func main() {
 	})
 
 	fmt.Println("Server running on http://localhost:8080")
-	http.ListenAndServe(":8080", mux)
+	err = http.ListenAndServe(":8080", corsMiddleware(mux))
+	if err != nil {
+		log.Fatal(err)
+	}
 }
 
 // Functions to deal with the databases
@@ -675,4 +685,33 @@ func getStats(db *sql.DB) (message string, error error) {
 	message = "Total number of entries: " + strconv.Itoa(numberOfEntries) + " Total number of users: " + strconv.Itoa(numberOfEntries1)
 
 	return message, nil
+}
+
+// CORS MIDDLEWARE
+func corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+		ip := r.RemoteAddr
+		mu.Lock()
+		if _, exists := clients[ip]; exists == false {
+			clients[ip] = rate.NewLimiter(5, 10)
+		}
+		limiter := clients[ip]
+		mu.Unlock()
+
+		if limiter.Allow() == false {
+			http.Error(w, "Rate limit", http.StatusTooManyRequests)
+			return
+		}
+
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }
