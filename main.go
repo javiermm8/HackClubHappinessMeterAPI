@@ -224,11 +224,6 @@ func main() {
 			}
 			generatedAPIKey := base64.URLEncoding.WithPadding(base64.NoPadding).EncodeToString(bytes)
 
-			err := newUser(db, generatedAPIKey, user.SlackID, time.Now())
-			if err != nil {
-				http.Error(w, `{"error": "DB failure."}`, http.StatusInternalServerError)
-			}
-
 			userInfo, err := slackApi.GetUserInfo(user.SlackID)
 			if err != nil {
 				http.Error(w, `{"error": "Unable to get slack username from id. Maybe a typo?"}`, http.StatusInternalServerError)
@@ -241,6 +236,11 @@ func main() {
 			}
 			if name == "" {
 				name = userInfo.Name
+			}
+
+			err1 := newUser(db, generatedAPIKey, user.SlackID, time.Now())
+			if err1 != nil {
+				http.Error(w, `{"error": "DB failure."}`, http.StatusInternalServerError)
 			}
 
 			message := "User resgistered! API Key: " + generatedAPIKey + " " + "SlackID: " + user.SlackID + " " + "Slack Name: " + name
