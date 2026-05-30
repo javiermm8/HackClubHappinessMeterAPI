@@ -116,9 +116,115 @@ func main() {
 			json.NewEncoder(w).Encode(map[string]string{
 				"message": message,
 			})
+			return
 		} else {
 			http.Error(w, `{"message": "Nobody with that happiness level was found."}`, http.StatusNotFound)
+			return
 		}
+	})
+
+	/// GET PROFILE
+	mux.HandleFunc("GET /profile", func(w http.ResponseWriter, r *http.Request) {
+		apiKey := r.Header.Get("Authorization")
+		slackID := r.URL.Query().Get("slackID")
+		if apiKey == "" {
+			http.Error(w, `{"message":"apiKey missing."}`, http.StatusBadRequest)
+			return
+		}
+
+		if apiKey == os.Getenv("REVIEW_KEY") {
+			if slackID == "" {
+				entry, averageHappiness, numberOfEntries, err := getProfile(db, "reviewerID")
+				if err != nil {
+					http.Error(w, `{"message": "Something went wrong. Please contact javim in slack."}`, http.StatusInternalServerError)
+					logger.Error("Problem with getProfile().", "error", err)
+					return
+				}
+
+				if numberOfEntries == 0 {
+					http.Error(w, `{"message": "No profile found. Hi reviewer! You first have to create an anonymous entry(/newEntry without slackID). Then, you'll be able to view the anonymous reviewr profile."}`, http.StatusNotFound)
+					return
+				}
+
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(map[string]string{
+					"Name":                 entry.Name,
+					"SlackID":              entry.SlackID,
+					"LatestHappinessLevel": strconv.Itoa(entry.HappinessLevel),
+					"LatestNote":           entry.Note,
+					"LatestEntryTimestamp": entry.Timestamp.String(),
+					"AverageHappiness":     strconv.FormatFloat(averageHappiness, 'f', -1, 64),
+					"NumberOfEntries":      strconv.Itoa(numberOfEntries),
+				})
+				return
+			} else {
+				entry, averageHappiness, numberOfEntries, err := getProfile(db, slackID)
+				if err != nil {
+					http.Error(w, `{"message": "Something went wrong. Something went wrong. Please contact javim in slack."}`, http.StatusInternalServerError)
+					logger.Error("Problem with getProfile().", "error", err)
+					return
+				}
+
+				if numberOfEntries == 0 {
+					http.Error(w, `{"message": "No profile found. ¿Have you created any entries?"}`, http.StatusNotFound)
+					logger.Error("Problem with getProfile().", "error", err)
+					return
+				}
+
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(map[string]string{
+					"Name":                 entry.Name,
+					"SlackID":              entry.SlackID,
+					"LatestHappinessLevel": strconv.Itoa(entry.HappinessLevel),
+					"LatestNote":           entry.Note,
+					"LatestEntryTimestamp": entry.Timestamp.String(),
+					"AverageHappiness":     strconv.FormatFloat(averageHappiness, 'f', -1, 64),
+					"NumberOfEntries":      strconv.Itoa(numberOfEntries),
+				})
+				return
+			}
+		}
+
+		realID, err := getDBSlackID(db, apiKey)
+		if err != nil {
+			http.Error(w, `{"error": "Auth error. Please contact javim in slack."}`, http.StatusInternalServerError)
+			logger.Error("Problem with getDBSlackID().", "error", err)
+			return
+		}
+
+		if slackID == "" {
+			http.Error(w, `{"message": "You must include a slackID unless you have a review key."}`, http.StatusBadRequest)
+			return
+		} else if slackID == realID {
+			entry, averageHappiness, numberOfEntries, err := getProfile(db, slackID)
+			if err != nil {
+				http.Error(w, `{"message": "Something went wrong. Something went wrong. Please contact javim in slack."}`, http.StatusInternalServerError)
+				logger.Error("Problem with getProfile().", "error", err)
+				return
+			}
+
+			if numberOfEntries == 0 {
+				http.Error(w, `{"message": "No profile found. ¿Have you created any entries?"}`, http.StatusNotFound)
+				logger.Error("Problem with getProfile().", "error", err)
+				return
+			}
+
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{
+				"Name":                 entry.Name,
+				"SlackID":              entry.SlackID,
+				"LatestHappinessLevel": strconv.Itoa(entry.HappinessLevel),
+				"LatestNote":           entry.Note,
+				"LatestEntryTimestamp": entry.Timestamp.String(),
+				"AverageHappiness":     strconv.FormatFloat(averageHappiness, 'f', -1, 64),
+				"NumberOfEntries":      strconv.Itoa(numberOfEntries),
+			})
+			return
+		} else {
+			http.Error(w, `{"message": "The provided API key doesn't match the provided SlackID. ¿Did you register? DM me to do so."}`, http.StatusUnauthorized)
+			return
+		}
+
 	})
 
 	/// POST NEW ENTRY
@@ -145,7 +251,7 @@ func main() {
 
 		if entry.APIKey == os.Getenv("REVIEW_KEY") {
 			if entry.SlackID == "" {
-				err := newEntry(db, "anonymousReviewer", entry.SlackID, entry.HappinessLevel, entry.Note, time.Now())
+				err := newEntry(db, "anonymousReviewer", "reviewerID", entry.HappinessLevel, entry.Note, time.Now())
 				if err != nil {
 					http.Error(w, `{"error": "DB failure. Please contact javim in slack."}`, http.StatusInternalServerError)
 					logger.Error("Problem with newEntry.", "error", err)
@@ -155,7 +261,8 @@ func main() {
 				json.NewEncoder(w).Encode(map[string]string{
 					"message": "Your happiness level has been logged anonymously(since you didn't include a SlackID, this is only allowed for reviewers)!",
 				})
-				logger.Info("A reviewer created a new Entry!", "SlackID", entry.SlackID, "Note", entry.Note, "HappinesLevel", entry.HappinessLevel)
+				logger.Info("A reviewer created a new Entry!", "Note", entry.Note, "HappinesLevel", entry.HappinessLevel)
+				return
 			} else {
 				userInfo, err := slackApi.GetUserInfo(entry.SlackID)
 				if err != nil {
@@ -183,6 +290,7 @@ func main() {
 					"message": name + ", your happiness level has been logged!",
 				})
 				logger.Info("A reviewer created a new Entry!", "name", name, "slackid:", entry.SlackID, "note", entry.Note, "happinesslevel", entry.HappinessLevel)
+				return
 			}
 		} else if getDBSlackIDerr != nil {
 			http.Error(w, `{"error": "Auth error. Please contact javim in slack."}`, http.StatusInternalServerError)
@@ -217,8 +325,9 @@ func main() {
 			json.NewEncoder(w).Encode(map[string]string{
 				"message": name + ", your happiness level has been logged!",
 			})
+			return
 		} else {
-			http.Error(w, `{"error": "The API key you provided doesn't match the provided SlackID. ¿Did you register? DM me to do so."}`, http.StatusBadRequest)
+			http.Error(w, `{"error": "The provided API key doesn't match the provided SlackID. ¿Did you register? DM me to do so."}`, http.StatusUnauthorized)
 			return
 		}
 	})
@@ -264,6 +373,7 @@ func main() {
 			if err != nil {
 				http.Error(w, `{"error": "DB failure."}`, http.StatusInternalServerError)
 				logger.Error("Problem with newUser().", "error", err)
+				return
 			}
 
 			message := "User resgistered! API Key: " + generatedAPIKey + " SlackID: " + user.SlackID + " Slack Name: " + name
@@ -272,8 +382,9 @@ func main() {
 				"message": message,
 			})
 			logger.Info("User resgistered!", "SlackID", user.SlackID, "Slack Name", name)
+			return
 		} else {
-			http.Error(w, `{"error": "Invalid management key"}`, http.StatusBadRequest)
+			http.Error(w, `{"error": "Invalid management key"}`, http.StatusUnauthorized)
 			logger.Info("Somebody tried to create a new user without a management key", "ip", r.RemoteAddr)
 			return
 		}
@@ -377,7 +488,7 @@ func getHappinessFriend(db *sql.DB, happinessLevel int) (*HappinessEntry, error)
 		FROM data
 		WHERE happinessLevel = ?
 		ORDER BY timestamp DESC
-		LIMIT 1;
+		LIMIT 2;
 	`, happinessLevel)
 	if err != nil {
 		return nil, err
@@ -439,4 +550,52 @@ func getDBSlackID(db *sql.DB, APIKey string) (SlackID string, error error) {
 	}
 
 	return user.SlackID, nil
+}
+
+func getProfile(db *sql.DB, slackID string) (*HappinessEntry, float64, int, error) {
+	row1, err := db.Query(`
+		SELECT
+			entryID,
+			name,
+			slackID,
+			happinessLevel,
+			note,
+			timestamp
+		FROM data
+		WHERE slackID = ?
+		ORDER BY timestamp ASC;
+	`, slackID)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	defer row1.Close()
+
+	var entry HappinessEntry
+	var totalHappiness int
+	var numberOfEntries int
+
+	for row1.Next() {
+		err = row1.Scan(
+			&entry.EntryID,
+			&entry.Name,
+			&entry.SlackID,
+			&entry.HappinessLevel,
+			&entry.Note,
+			&entry.Timestamp,
+		)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				return nil, 0, 0, nil
+			}
+			return nil, 0, 0, err
+		}
+
+		numberOfEntries += 1
+
+		totalHappiness = totalHappiness + entry.HappinessLevel
+	}
+
+	var averageHappiness float64 = float64(totalHappiness) / float64(numberOfEntries)
+
+	return &entry, averageHappiness, numberOfEntries, nil
 }
