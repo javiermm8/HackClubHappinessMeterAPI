@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"log/slog"
 	"net/http"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/joho/godotenv"
 	"github.com/slack-go/slack"
+	"github.com/slack-go/slack/slackevents"
 	"golang.org/x/time/rate"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -395,12 +397,16 @@ func main() {
 				name = userInfo.Name
 			}
 
-			err = newUser(db, generatedAPIKey, user.SlackID, time.Now())
+			alreadyExists, err := newUser(db, generatedAPIKey, user.SlackID, time.Now())
 			if err != nil {
 				http.Error(w, `{"error": "DB failure."}`, http.StatusInternalServerError)
 				logger.Error("Problem with newUser().", "error", err)
 				return
+			} else if alreadyExists == true {
+				http.Error(w, `{"error": "User already exists."}`, http.StatusBadRequest)
+				return
 			}
+
 			logger.Info("User registered!", "SlackID", user.SlackID, "Slack Name", name)
 			message := "User registered! API Key: " + generatedAPIKey + " SlackID: " + user.SlackID + " Slack Name: " + name
 			w.Header().Set("Content-Type", "application/json")
@@ -412,6 +418,105 @@ func main() {
 			http.Error(w, `{"error": "Invalid management key"}`, http.StatusUnauthorized)
 			logger.Info("Somebody tried to create a new user without a management key", "ip", r.RemoteAddr)
 			return
+		}
+
+	})
+
+	/// SLACK BOT RECEIVE MESSAGES
+	mux.HandleFunc("/slackEvents", func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		eventsAPIEvent, err := slackevents.ParseEvent(json.RawMessage(body), slackevents.OptionNoVerifyToken())
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		// IDE wants me to use a switch, which I have no idea how to use. If else works, so it stays that way.
+		if eventsAPIEvent.Type == slackevents.URLVerification {
+			var challenge *slackevents.ChallengeResponse
+
+			err := json.Unmarshal([]byte(body), &challenge)
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+
+			w.Header().Set("Content-Type", "text")
+			w.Write([]byte(challenge.Challenge))
+		} else if eventsAPIEvent.Type == slackevents.CallbackEvent {
+			innerEvent := eventsAPIEvent.InnerEvent
+			ev, ok := innerEvent.Data.(*slackevents.MessageEvent)
+
+			if ev.User == os.Getenv("BOT_ID") {
+				return
+			}
+
+			logger.Info("The bot received a message", "SlackID", ev.User, "Message", ev.Text)
+
+			if ok == true && ev.Text == "Register" {
+				bytes := make([]byte, 32)
+				if _, err := rand.Read(bytes); err != nil {
+					w.WriteHeader(http.StatusInternalServerError)
+					logger.Error("Failed to generate API key.", "error", err)
+					return
+				}
+				generatedAPIKey := base64.URLEncoding.WithPadding(base64.NoPadding).EncodeToString(bytes)
+
+				userInfo, err := slackApi.GetUserInfo(ev.User)
+				if err != nil {
+					w.WriteHeader(http.StatusInternalServerError)
+					return
+				}
+
+				name := userInfo.Profile.DisplayName
+				if name == "" {
+					name = userInfo.RealName
+				}
+				if name == "" {
+					name = userInfo.Name
+				}
+
+				alreadyExists, err := newUser(db, generatedAPIKey, ev.User, time.Now())
+				if err != nil {
+					_, _, err = slackApi.PostMessage(
+						ev.Channel, slack.MsgOptionText("Something went wrong. Please contact javim on Slack.", false),
+					)
+					if err != nil {
+						w.WriteHeader(http.StatusInternalServerError)
+						logger.Info("Failed to send message", "SlackID", ev.User)
+					}
+					logger.Error("Problem with newUser().", "error", err)
+					return
+				} else if alreadyExists == true {
+					_, _, err = slackApi.PostMessage(
+						ev.Channel, slack.MsgOptionText("User already exists.", false),
+					)
+					if err != nil {
+						w.WriteHeader(http.StatusInternalServerError)
+						logger.Info("Failed to send message", "SlackID", ev.User)
+					}
+					return
+				}
+
+				logger.Info("User registered by Slack Bot!", "SlackID", ev.User, "Slack Name", name)
+				message := "Hi " + name + "! Your API Key is: " + generatedAPIKey + " Keep it safe! SlackID: " + ev.User + " Slack Name: " + name
+
+				_, _, err = slackApi.PostMessage(
+					ev.Channel, slack.MsgOptionText(message, false),
+				)
+				if err != nil {
+					w.WriteHeader(http.StatusInternalServerError)
+					logger.Info("Failed to send message", "SlackID", ev.User)
+				}
+				return
+			} else {
+				return
+			}
 		}
 
 	})
@@ -488,22 +593,46 @@ func newEntry(
 	return nil
 }
 
-func newUser(db *sql.DB, APIKey string, SlackID string, Timestamp time.Time) (error error) {
+func newUser(db *sql.DB, APIKey string, SlackID string, Timestamp time.Time) (alreadyExists bool, error error) {
+	row, err := db.Query(`
+		SELECT
+			entryID,
+			slackID
+		FROM auth
+		WHERE slackID = ?;
+	`, SlackID)
+	if err != nil {
+		return false, err
+	}
+	defer row.Close()
+
+	var user Auth
+
+	for row.Next() {
+		row.Scan(
+			&user.EntryID,
+			&user.SlackID,
+		)
+	}
+	if user.SlackID != "" {
+		return true, nil
+	}
+
 	SQLNewUser := `
 	INSERT INTO auth
 	(APIKey, slackID, timestamp)
 	VALUES (?, ?, ?)
 	`
-	_, err := db.Exec(
+	_, err = db.Exec(
 		SQLNewUser,
 		APIKey,
 		SlackID,
 		Timestamp,
 	)
 	if err != nil {
-		return err
+		return false, err
 	}
-	return nil
+	return false, nil
 }
 
 func getHappinessFriend(db *sql.DB, happinessLevel int) (*HappinessEntry, error) {
