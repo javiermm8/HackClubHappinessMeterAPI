@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>HackClub Happiness Meter API</title>
+        <style>
+            body {
+                font-family: monospace;
+                max-width: 600px;
+                margin: 2rem auto;
+                padding: 0 1rem;
+                background-color: #121212;
+                color: #f5f5f5;
+            }
+            pre {
+                background: #32322a;
+                padding: 0.75rem;
+                overflow-x: auto;
+                border-radius: 10px;
+            }
+        </style>
+    </head>
+    <body>
+        <h1>HackClub Happiness Meter API</h1>
+        <p>
+            A simple API for logging the happiness of users in the hackclub
+            community.
+        </p>
+        <p>Base URL:</p>
+        <pre>example.com:8080/</pre>
+
+        <h2>Features</h2>
+        <ul>
+            <li>Authorization</li>
+            <li>SQLite Database</li>
+            <li>External API (Slack integration)</li>
+            <li>Rate limiting</li>
+            <li>
+                Proper error handling & input validation (Arguable, but I think
+                it's good enough.)
+            </li>
+            <li>Six endpoints (2 POST and 4 GET)</li>
+        </ul>
+
+        <h2>Authorization</h2>
+        <p>
+            Some endpoints require you to provide an APIKey. You can register
+            and get one by sending a message to BLABLABLA(ID) on Slack. The bot
+            will reply with your APIKey, keep it safe!
+        </p>
+        <p
+            style="
+                background: #ffca83;
+                padding: 0.75rem;
+                overflow-x: auto;
+                border-radius: 10px;
+                color: #121212;
+            "
+        >
+            <b>Note for reviewers:</b> Reviewers are encouraged to follow the
+            usual registration process through the Slack bot but, if you prefer
+            to stay anonymous or simply don't want to deal with that, you can
+            find a reviewer key in the project submission notes. Just be aware
+            that, due to my laziness, a reviewer key might be able to create
+            entries on behalf of other users or check other user's profiles.
+        </p>
+
+        <h2>Endpoints</h2>
+
+        <h3>GET /status</h3>
+        <p>Check if the API is running.</p>
+        <pre>curl example.com:8080/status</pre>
+        <p>Response:</p>
+        <pre>{"message": "Service is running."}</pre>
+
+        <h3>GET /docs</h3>
+        <p>Returns this docs page.</p>
+        <pre>curl example.com:8080/docs</pre>
+
+        <h3>GET /happinessFriend</h3>
+        <p>
+            Returns the second latest user with the provided happiness level
+            (Max:10/Min:1).
+        </p>
+        <pre>
+curl example.com:8080/happinessFriend?happinessLevel=HAPPINESSLEVEL</pre
+        >
+        <p>Response:</p>
+        <pre>{"message": "No users found with that happiness level."}</pre>
+        <p>Or:</p>
+        <pre>
+{"message": "Your happiness friend is NAME! Their slack id is: SLACKID and the last time they logged a happiness level of HAPPINESSLEVEL was at: TIMESTAMP The note they added to their latest entry was: NOTE"}</pre
+        >
+
+        <h3>GET /profile</h3>
+        <p>
+            Returns your profile. Includes: some stats, user info and latest
+            entry. Requires APIKey and SlackID.
+        </p>
+        <pre>
+curl example.com:8080/profile?slackID=SLACKID -H "Authorization: APIKEY"</pre
+        >
+        <p>Response:</p>
+        <pre>
+{"Name": NAME, "SlackID": SLACKID, "LatestHappinessLevel": LATESTHAPPINESSLEVEL, "LatestNote": LATESTNOTE, "LatestEntryTimestamp": LATESTENTRYTIMESTAMP, "AverageHappiness": AVERAGEHAPPINESSLEVEL, "NumberOfEntries": NUMBEROFENTRIES,"}</pre
+        >
+
+        <h3>GET /stats</h3>
+        <p>Returns some general stats.</p>
+        <pre>curl example.com:8080/stats</pre>
+        <p>Response:</p>
+        <pre>
+[{"message": "Total number of entries: TOTALNUMBEROFENTRIES Total number of users: TOTALNUMBEROFUSERS"}]</pre
+        >
+
+        <h3>POST /newEntry</h3>
+        <p>
+            Adds a new entry. Requires APIKey, HappinessLevel, SlackID and Note.
+        </p>
+        <pre>
+curl -X POST example.com:8080/newEntry \ -H "Content-Type: application/json" -d '{"APIKey":"value", "HappinessLevel":int, "SlackID":string, "Note":string}'</pre
+        >
+        <p>Response:</p>
+        <pre>{"message": "NAME, your happiness level has been logged!"}</pre>
+
+        <h3>POST /newUser</h3>
+        <p>
+            Management endpoint for manually adding new users. Requires
+            ManagementKey and SlackID.
+        </p>
+        <pre>
+curl -X POST example.com:8080/newUser -H "Content-Type: application/json" -d '{"ManagementKey":"value", "SlackID":"value"}'</pre
+        >
+        <p>Response:</p>
+        <pre>
+{"message": "User registered! API Key: APIKEY SlackID: SLACKID Slack Name: NAME"}</pre
+        >
+    </body>
+</html>
+
+<h2>Error Handling</h2>
+<p>
+    All errors are marked with an http status error code and have a clear
+    message explaining what's wrong. In the case of an internal server error
+    (such as when something is wrong with the database) the message will also
+    politely ask that I am contacted.
+</p>
+
+<h2>Rate Limits</h2>
+<p>1 request/second per ip address.</p>
+
+<h2>Slack</h2>
+<p>
+    The API is dependent on Slack for multiple features, in the case of a Slack
+    outage this API would be affected.
+</p>
