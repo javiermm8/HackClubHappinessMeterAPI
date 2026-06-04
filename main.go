@@ -2,13 +2,16 @@ package main
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
@@ -145,6 +148,14 @@ func main() {
 			return
 		}
 
+		hash := sha256.New()
+		_, err := hash.Write([]byte(apiKey))
+		if err != nil {
+			http.Error(w, `{"error": "Something went wrong while creating your API Key."}`, http.StatusInternalServerError)
+			logger.Error("Problem with almostHash.Write()", "error", err)
+			return
+		}
+
 		if apiKey == os.Getenv("REVIEW_KEY") {
 			if slackID == "" {
 				entry, averageHappiness, numberOfEntries, err := getProfile(db, "reviewerID")
@@ -198,7 +209,7 @@ func main() {
 			}
 		}
 
-		realID, err := getDBSlackID(db, apiKey)
+		realID, err := getDBSlackID(db, hex.EncodeToString(hash.Sum(nil)))
 		if err != nil {
 			http.Error(w, `{"error": "Auth error. Please contact javim on slack."}`, http.StatusInternalServerError)
 			logger.Error("Problem with getDBSlackID().", "error", err)
@@ -275,7 +286,15 @@ func main() {
 			return
 		}
 
-		realID, getDBSlackIDerr := getDBSlackID(db, entry.APIKey)
+		hash := sha256.New()
+		_, err := hash.Write([]byte(entry.APIKey))
+		if err != nil {
+			http.Error(w, `{"error": "Something went wrong while creating your API Key."}`, http.StatusInternalServerError)
+			logger.Error("Problem with almostHash.Write()", "error", err)
+			return
+		}
+
+		realID, getDBSlackIDerr := getDBSlackID(db, hex.EncodeToString(hash.Sum(nil)))
 
 		if entry.APIKey == os.Getenv("REVIEW_KEY") {
 			if entry.SlackID == "" {
@@ -382,6 +401,13 @@ func main() {
 				return
 			}
 			generatedAPIKey := base64.URLEncoding.WithPadding(base64.NoPadding).EncodeToString(bytes)
+			hash := sha256.New()
+			_, err := hash.Write([]byte(generatedAPIKey))
+			if err != nil {
+				http.Error(w, `{"error": "Something went wrong while creating your API Key."}`, http.StatusInternalServerError)
+				logger.Error("Problem with almostHash.Write()", "error", err)
+				return
+			}
 
 			userInfo, err := slackApi.GetUserInfo(user.SlackID)
 			if err != nil {
@@ -397,7 +423,7 @@ func main() {
 				name = userInfo.Name
 			}
 
-			alreadyExists, err := newUser(db, generatedAPIKey, user.SlackID, time.Now())
+			alreadyExists, err := newUser(db, hex.EncodeToString(hash.Sum(nil)), user.SlackID, time.Now())
 			if err != nil {
 				http.Error(w, `{"error": "DB failure."}`, http.StatusInternalServerError)
 				logger.Error("Problem with newUser().", "error", err)
@@ -452,6 +478,11 @@ func main() {
 			innerEvent := eventsAPIEvent.InnerEvent
 			ev, ok := innerEvent.Data.(*slackevents.MessageEvent)
 
+			if ok == false {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+
 			if ev.User == os.Getenv("BOT_ID") {
 				return
 			}
@@ -466,6 +497,13 @@ func main() {
 					return
 				}
 				generatedAPIKey := base64.URLEncoding.WithPadding(base64.NoPadding).EncodeToString(bytes)
+				hash := sha256.New()
+				_, err := hash.Write([]byte(generatedAPIKey))
+				if err != nil {
+					http.Error(w, `{"error": "Something went wrong while creating your API Key."}`, http.StatusInternalServerError)
+					logger.Error("Problem with almostHash.Write()", "error", err)
+					return
+				}
 
 				userInfo, err := slackApi.GetUserInfo(ev.User)
 				if err != nil {
@@ -481,7 +519,7 @@ func main() {
 					name = userInfo.Name
 				}
 
-				alreadyExists, err := newUser(db, generatedAPIKey, ev.User, time.Now())
+				alreadyExists, err := newUser(db, hex.EncodeToString(hash.Sum(nil)), ev.User, time.Now())
 				if err != nil {
 					_, _, err = slackApi.PostMessage(
 						ev.Channel, slack.MsgOptionText("Something went wrong. Please contact javim on Slack.", false),
@@ -531,7 +569,7 @@ func main() {
 // Functions to deal with the databases
 
 func createTable(db *sql.DB) {
-	// SQL sintaxt to create the table(if it doesn't already exist) with it's necessary colums.
+	// SQL syntaxt to create the table(if it doesn't already exist) with it's necessary colums.
 	SQLcreateTableData := `
 	CREATE TABLE IF NOT EXISTS data (
 	entryID INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -826,7 +864,7 @@ func corsMiddleware(next http.Handler) http.Handler {
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 
-		ip := r.RemoteAddr
+		ip, _, _ := net.SplitHostPort(r.RemoteAddr)
 		mu.Lock()
 		if _, exists := clients[ip]; exists == false {
 			clients[ip] = rate.NewLimiter(1, 1)
