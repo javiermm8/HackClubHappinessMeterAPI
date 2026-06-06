@@ -456,6 +456,20 @@ func main() {
 			return
 		}
 
+		secretsVerifier, err := slack.NewSecretsVerifier(r.Header, os.Getenv("SLACK_BOT_SIGNING_SECRET"))
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if _, err := secretsVerifier.Write(body); err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		if err := secretsVerifier.Ensure(); err != nil {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+
 		eventsAPIEvent, err := slackevents.ParseEvent(json.RawMessage(body), slackevents.OptionNoVerifyToken())
 		if err != nil {
 			w.WriteHeader(http.StatusBadRequest)
@@ -566,8 +580,7 @@ func main() {
 	}
 }
 
-// Functions to deal with the databases
-
+// Functions to deal with the database
 func createTable(db *sql.DB) {
 	// SQL syntaxt to create the table(if it doesn't already exist) with it's necessary colums.
 	SQLcreateTableData := `
