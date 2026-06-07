@@ -920,6 +920,7 @@ func corsMiddleware(next http.Handler) http.Handler {
 
 		c.lastSeen = time.Now()
 		limiter := c.limiter
+		mu.Unlock()
 
 		if limiter.Allow() == false {
 			http.Error(w, "Too many requests.", http.StatusTooManyRequests)
