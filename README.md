@@ -7,7 +7,7 @@ _A simple API for logging the happiness of users in the hackclub
 ![Hackatime Badge](https://hackatime.hackclub.com/api/v1/badge/U0B5ZBRJTL4/javiermm8/HackClubHappinessMeterAPI)
 
 
-Detailed information and example requests can be found in: `https://pep-unethical-copy.ngrok-free.dev/docs/`
+Detailed information and example requests can be found in: `https://pep-unethical-copy.ngrok-free.dev/docs`
 
 ## Base URL: 
 
