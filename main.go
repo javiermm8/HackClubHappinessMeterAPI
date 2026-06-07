@@ -587,8 +587,8 @@ func main() {
 
 	})
 
-	fmt.Println("Server running on http://localhost:8080")
-	err = http.ListenAndServe(":8080", corsMiddleware(mux))
+	fmt.Println("Server running on http://127.0.0.1:8081")
+	err = http.ListenAndServe(":8081", corsMiddleware(mux))
 	if err != nil {
 		log.Fatal(err)
 	}
