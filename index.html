@@ -162,4 +162,19 @@ curl -X POST https://pep-unethical-copy.ngrok-free.dev/newUser -H "Content-Type:
     outage this API would be affected.
 </p>
 
+<h2>Security warnings</h2>
+<p>After some careful reviewing of the API I learnt that:</p>
+<ul>
+    <li>
+        CORS wildcards are bad, especially for authenticated endpoints. I'll
+        change it if anyone wants to make a frontend.
+    </li>
+    <li>
+        The database is vulnerable to rainbow-table attacks because I didn't
+        salt the APIs when hashing them. This would only be a problem if the
+        database were to leak, but honestly, if that happens, I'd have bigger
+        problems than leaking some happiness levels.
+    </li>
+</ul>
+
 <h2>Created by javim.</h2>

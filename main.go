@@ -55,8 +55,13 @@ type POSTNewUser struct {
 	SlackID       string
 }
 
+type clientEntry struct {
+	limiter  *rate.Limiter
+	lastSeen time.Time
+}
+
 // Rate limit variables
-var clients = make(map[string]*rate.Limiter)
+var clients = make(map[string]*clientEntry)
 var mu sync.Mutex
 
 func main() {
@@ -268,6 +273,9 @@ func main() {
 
 	/// POST NEW ENTRY
 	mux.HandleFunc("POST /newEntry", func(w http.ResponseWriter, r *http.Request) {
+
+		r.Body = http.MaxBytesReader(w, r.Body, 64*1024)
+
 		var entry POSTNewEntry
 		dec := json.NewDecoder(r.Body)
 		dec.DisallowUnknownFields()
@@ -381,6 +389,9 @@ func main() {
 
 	/// POST NEW USER
 	mux.HandleFunc("POST /newUser", func(w http.ResponseWriter, r *http.Request) {
+
+		r.Body = http.MaxBytesReader(w, r.Body, 64*1024)
+
 		var user POSTNewUser
 		dec := json.NewDecoder(r.Body)
 		dec.DisallowUnknownFields()
@@ -450,6 +461,9 @@ func main() {
 
 	/// SLACK BOT RECEIVE MESSAGES
 	mux.HandleFunc("/slackEvents", func(w http.ResponseWriter, r *http.Request) {
+
+		r.Body = http.MaxBytesReader(w, r.Body, 2048*1024)
+
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			w.WriteHeader(http.StatusBadRequest)
@@ -578,6 +592,22 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	//gorutine that cleans clients after 10 minutes
+	go func() {
+		//same as for true
+		for {
+			time.Sleep(10 * time.Minute)
+
+			mu.Lock()
+			for ip, c := range clients {
+				if time.Since(c.lastSeen) > 30*time.Minute {
+					delete(clients, ip)
+				}
+			}
+			mu.Unlock()
+		}
+	}()
 }
 
 // Functions to deal with the database
@@ -879,11 +909,17 @@ func corsMiddleware(next http.Handler) http.Handler {
 
 		ip, _, _ := net.SplitHostPort(r.RemoteAddr)
 		mu.Lock()
-		if _, exists := clients[ip]; exists == false {
-			clients[ip] = rate.NewLimiter(1, 1)
+
+		c, exists := clients[ip]
+		if exists == false {
+			c = &clientEntry{
+				limiter: rate.NewLimiter(1, 1),
+			}
+			clients[ip] = c
 		}
-		limiter := clients[ip]
-		mu.Unlock()
+
+		c.lastSeen = time.Now()
+		limiter := c.limiter
 
 		if limiter.Allow() == false {
 			http.Error(w, "Too many requests.", http.StatusTooManyRequests)
