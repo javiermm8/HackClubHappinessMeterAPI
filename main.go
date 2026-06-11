@@ -905,7 +905,12 @@ func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, ngrok-skip-browser-warning")
+
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
 
 		ip, _, _ := net.SplitHostPort(r.RemoteAddr)
 		mu.Lock()
@@ -913,7 +918,7 @@ func corsMiddleware(next http.Handler) http.Handler {
 		c, exists := clients[ip]
 		if exists == false {
 			c = &clientEntry{
-				limiter: rate.NewLimiter(1, 1),
+				limiter: rate.NewLimiter(5, 10),
 			}
 			clients[ip] = c
 		}
@@ -924,11 +929,6 @@ func corsMiddleware(next http.Handler) http.Handler {
 
 		if limiter.Allow() == false {
 			http.Error(w, "Too many requests.", http.StatusTooManyRequests)
-			return
-		}
-
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusOK)
 			return
 		}
 
